@@ -15,6 +15,7 @@ const char* client_id                   = "heatpump"; // Must be unique on the M
 const char* heatpump_topic              = "heatpump";
 const char* heatpump_set_topic          = "heatpump/set";
 const char* heatpump_rtemp_set_topic    = "heatpump/set/rtemp";
+const char* heatpump_rtempoffset_set_topic = "heatpump/set/rtempoffset";
 const char* heatpump_status_topic       = "heatpump/status";
 const char* heatpump_timers_topic       = "heatpump/timers";
 

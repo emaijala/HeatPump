@@ -30,6 +30,8 @@ HeatPump hp;
 Ticker tickerRed;
 Ticker tickerBlue;
 unsigned long lastTempSend;
+unsigned long lastRemoteTemp; // Last time a remote temp value has been received
+float remoteTempOffset = 0; // Programmable fine-tuning value for remote temperature
 
 // debug mode, when true, will send all packets received from the heatpump to topic heatpump_debug_topic
 // this can also be set by sending "on" to heatpump_debug_set_topic
@@ -186,7 +188,7 @@ void hpStatusChanged(heatpumpStatus currentStatus) {
   }
 
   // send the timer info
-  const size_t bufferSizeTimers = JSON_OBJECT_SIZE(5);
+  /*const size_t bufferSizeTimers = JSON_OBJECT_SIZE(5);
   DynamicJsonDocument rootTimers(bufferSizeTimers);
 
   rootTimers["mode"]          = currentStatus.timers.mode;
@@ -200,7 +202,7 @@ void hpStatusChanged(heatpumpStatus currentStatus) {
 
   if (!mqtt_client.publish(heatpump_timers_topic, bufferTimers, true)) {
     mqtt_client.publish(heatpump_debug_topic, "failed to publish timer info to heatpump/status topic");
-  }
+  }*/
 }
 
 void hpPacketDebug(byte* packet, unsigned int length, char* packetDirection) {
@@ -280,6 +282,10 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     if (root.containsKey("remoteTemp")) {
       float remoteTemp = root["remoteTemp"];
       hp.setRemoteTemperature(remoteTemp);
+      lastRemoteTemp = millis();
+      // Update room temp in 5 seconds
+      lastTempSend = millis() - SEND_ROOM_TEMP_INTERVAL_MS + 5000;
+      mqtt_client.publish(heatpump_debug_topic, "Remote temp set");
     }
     else if (root.containsKey("custom")) {
       String custom = root["custom"];
@@ -322,8 +328,20 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       mqtt_client.publish(heatpump_debug_topic, "debug mode disabled");
     }
   } else if (strcmp(topic, heatpump_rtemp_set_topic) == 0) { // set remote temperature
-    float remoteTemp = String(message).toFloat();
+    float remoteTemp = String(message).toFloat() + remoteTempOffset;
     hp.setRemoteTemperature(remoteTemp);
+    char buf[30];
+    snprintf(buf, 29, "Remote temp set to %2.1f", remoteTemp);
+    mqtt_client.publish(heatpump_debug_topic, buf);
+    
+    lastRemoteTemp = millis();
+    // Update room temp in 5 seconds
+    lastTempSend = millis() - SEND_ROOM_TEMP_INTERVAL_MS + 5000;
+  } else if (strcmp(topic, heatpump_rtempoffset_set_topic) == 0) { // set remote temperature offset
+    remoteTempOffset = String(message).toFloat();
+    char buf[40];
+    snprintf(buf, 39, "Remote temp offset set to %2.1f", remoteTempOffset);
+    mqtt_client.publish(heatpump_debug_topic, buf);
   } else {
     mqtt_client.publish(heatpump_debug_topic, strcat("heatpump: wrong mqtt topic: ", topic));
   }
@@ -338,6 +356,7 @@ void mqttConnect() {
     if (mqtt_client.connect(client_id, mqtt_username, mqtt_password)) {
       mqtt_client.subscribe(heatpump_set_topic);
       mqtt_client.subscribe(heatpump_rtemp_set_topic);
+      mqtt_client.subscribe(heatpump_rtempoffset_set_topic);
       mqtt_client.subscribe(heatpump_debug_set_topic);
       tickerBlue.detach();
       digitalWrite(blueLedPin, LOW);
@@ -360,6 +379,12 @@ void loop() {
     lastTempSend = millis();
   }
 
+  if ((unsigned long)(millis() - lastRemoteTemp) >= 3600000) { //reset to local temp sensor after 1 hour of no remote temp updates
+    hp.setRemoteTemperature(0);
+    lastRemoteTemp = millis();
+    mqtt_client.publish(heatpump_debug_topic, "Remote temp disabled");
+  }
+    
   mqtt_client.loop();
 
 #ifdef OTA

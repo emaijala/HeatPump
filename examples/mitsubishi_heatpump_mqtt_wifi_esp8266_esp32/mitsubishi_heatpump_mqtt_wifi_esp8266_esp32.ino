@@ -31,7 +31,7 @@ Ticker tickerRed;
 Ticker tickerBlue;
 unsigned long lastTempSend;
 unsigned long lastRemoteTemp; // Last time a remote temp value has been received
-float remoteTempOffset = 0; // Programmable fine-tuning value for remote temperature
+float remoteTempOffset = 0; // Programmable fine-tuning value for remote temperature. Saved to config.
 
 // debug mode, when true, will send all packets received from the heatpump to topic heatpump_debug_topic
 // this can also be set by sending "on" to heatpump_debug_set_topic
@@ -79,6 +79,22 @@ void setup() {
         }
       }
     }    
+
+    if (SPIFFS.exists("/settings.json")) {
+      File settingsFile = SPIFFS.open("/settings.json", "r");
+      if (settingsFile) {
+        size_t size = settingsFile.size();
+        // Allocate a buffer to store contents of the file.
+        std::unique_ptr<char[]> buf(new char[size]);
+
+        settingsFile.readBytes(buf.get(), size);
+        settingsFile.close();
+        DynamicJsonDocument jsonDoc(1024);
+        if (deserializeJson(jsonDoc, buf.get()) == DeserializationError::Ok) {
+          remoteTempOffset = jsonDoc["remote_temp_offset"];
+        }
+      }
+    }    
   }
 
   WiFiManagerParameter custom_mqtt_server("server", "mqtt server", mqtt_server, 40);
@@ -122,6 +138,7 @@ void setup() {
       configFile.close();
     }
   }
+  SPIFFS.end();
 
   tickerRed.detach();
   tickerRed.attach(1, toggleRed);
@@ -330,8 +347,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   } else if (strcmp(topic, heatpump_rtemp_set_topic) == 0) { // set remote temperature
     float remoteTemp = String(message).toFloat() + remoteTempOffset;
     hp.setRemoteTemperature(remoteTemp);
-    char buf[30];
-    snprintf(buf, 29, "Remote temp set to %2.1f", remoteTemp);
+    char buf[40];
+    snprintf(buf, 39, "Remote temp set to %2.1f (offset %2.1f)", remoteTemp, remoteTempOffset);
     mqtt_client.publish(heatpump_debug_topic, buf);
     
     lastRemoteTemp = millis();
@@ -342,6 +359,9 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     char buf[40];
     snprintf(buf, 39, "Remote temp offset set to %2.1f", remoteTempOffset);
     mqtt_client.publish(heatpump_debug_topic, buf);
+
+    // Save settings
+    saveSettings();
   } else {
     mqtt_client.publish(heatpump_debug_topic, strcat("heatpump: wrong mqtt topic: ", topic));
   }
@@ -364,6 +384,21 @@ void mqttConnect() {
       // Wait 5 seconds before retrying
       delay(5000);
     }
+  }
+}
+
+void saveSettings() {
+  if (SPIFFS.begin()) {
+    DynamicJsonDocument jsonDoc(1024);
+    jsonDoc["remote_temp_offset"] = remoteTempOffset;
+
+    File settingsFile = SPIFFS.open("/settings.json", "w");
+    if (settingsFile) {
+      serializeJson(jsonDoc, settingsFile);
+      settingsFile.close();
+    }
+
+    SPIFFS.end();
   }
 }
 
